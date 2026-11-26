@@ -9,36 +9,44 @@ env:
   PROJECT_ID: ${{ secrets.GCP_PROJECT_ID }}
   GKE_CLUSTER: ${{ secrets.GKE_CLUSTER }}
   GKE_ZONE: ${{ secrets.GKE_ZONE }}
-  IMAGE_NAME: gcr.io/${{ secrets.GCP_PROJECT_ID }}/python-appgke
+  IMAGE_NAME: us-central1-docker.pkg.dev/${{ secrets.GCP_PROJECT_ID }}/python-appgke/python-appgke
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
+
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v3
-    - name: Authenticate with Google Cloud
-      uses: google-github-actions/auth@v3
-      with:
-        credentials_json: ${{ secrets.GCP_SA_KEY }}
-    - uses: "google-github-actions/setup-gcloud@v3"
-      with:
-        install_components: "gke-gcloud-auth-plugin"
+      - name: Checkout code
+        uses: actions/checkout@v3
 
-    - name: Configure Docker
-      run: gcloud auth configure-docker gcr.io
+      - name: Authenticate with Google Cloud
+        uses: google-github-actions/auth@v2
+        with:
+          credentials_json: ${{ secrets.GCP_SA_KEY }}
 
-    - name: Build and push Docker image
-      run: |
-        docker build -t $IMAGE_NAME:$GITHUB_SHA .
-        docker build -t $IMAGE_NAME:latest .
-        docker push $IMAGE_NAME:$GITHUB_SHA
-        docker push $IMAGE_NAME:latest
+      - name: Setup Google Cloud SDK
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          install_components: gke-gcloud-auth-plugin
 
-    - name: Deploy to GKE
-      env:
-        CLOUDSDK_CONTAINER_USE_APPLICATION_DEFAULT_CREDENTIALS: true
-      run: |
-        gcloud container clusters get-credentials $GKE_CLUSTER --zone $GKE_ZONE
-        kubectl apply -f k8s/deployment.yaml
-        kubectl apply -f k8s/service.yaml
+      - name: Configure Docker
+        run: gcloud auth configure-docker us-central1-docker.pkg.dev --quiet
+
+      - name: Build and push Docker image
+        run: |
+          docker build -t "$IMAGE_NAME:$GITHUB_SHA" .
+          docker push "$IMAGE_NAME:$GITHUB_SHA"
+
+      - name: Deploy to GKE
+        env:
+          CLOUDSDK_CONTAINER_USE_APPLICATION_DEFAULT_CREDENTIALS: 'true'
+        run: |
+          gcloud container clusters get-credentials "$GKE_CLUSTER" \
+            --zone "$GKE_ZONE" --project "$PROJECT_ID"
+
+          sed "s|IMAGE_PLACEHOLDER|$IMAGE_NAME:$GITHUB_SHA|g" \
+            k8s/deployment.yaml | kubectl apply -f -
+
+          kubectl apply -f k8s/service.yaml
+
+          kubectl rollout status deployment/python-appgke --timeout=300s
